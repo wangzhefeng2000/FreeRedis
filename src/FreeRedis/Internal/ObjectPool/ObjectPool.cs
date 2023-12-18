@@ -11,34 +11,40 @@ namespace FreeRedis.Internal.ObjectPool
     {
         internal static void WriteLine(string text, ConsoleColor backgroundColor)
         {
-            try //#643
+            try
             {
-                var bgcolor = Console.BackgroundColor;
-                var forecolor = Console.ForegroundColor;
-                Console.BackgroundColor = backgroundColor;
+                System.Diagnostics.Debug.WriteLine(text);
+            }
+            catch { }
+            return;
+            //try //#643
+            //{
+            //    var bgcolor = Console.BackgroundColor;
+            //    var forecolor = Console.ForegroundColor;
+            //    Console.BackgroundColor = backgroundColor;
 
-                switch (backgroundColor)
-                {
-                    case ConsoleColor.Yellow:
-                        Console.ForegroundColor = ConsoleColor.White;
-                        break;
-                    case ConsoleColor.DarkGreen:
-                        Console.ForegroundColor = ConsoleColor.White;
-                        break;
-                }
-                Console.Write(text);
-                Console.BackgroundColor = bgcolor;
-                Console.ForegroundColor = forecolor;
-                Console.WriteLine();
-            }
-            catch
-            {
-                try
-                {
-                    System.Diagnostics.Debug.WriteLine(text);
-                }
-                catch { }
-            }
+            //    switch (backgroundColor)
+            //    {
+            //        case ConsoleColor.Yellow:
+            //            Console.ForegroundColor = ConsoleColor.White;
+            //            break;
+            //        case ConsoleColor.DarkGreen:
+            //            Console.ForegroundColor = ConsoleColor.White;
+            //            break;
+            //    }
+            //    Console.Write(text);
+            //    Console.BackgroundColor = bgcolor;
+            //    Console.ForegroundColor = forecolor;
+            //    Console.WriteLine();
+            //}
+            //catch
+            //{
+            //    try
+            //    {
+            //        System.Diagnostics.Debug.WriteLine(text);
+            //    }
+            //    catch { }
+            //}
         }
     }
 
@@ -154,6 +160,8 @@ namespace FreeRedis.Internal.ObjectPool
                 {
                     if (UnavailableException != null)
                     {
+                        lock (_allObjectsLock)
+                            _allObjects.ForEach(a => a.LastGetTime = a.LastReturnTime = new DateTime(2000, 1, 1));
                         UnavailableException = null;
                         UnavailableTime = null;
                         AvailableTime = DateTime.Now;
@@ -164,9 +172,6 @@ namespace FreeRedis.Internal.ObjectPool
 
             if (isRestored)
             {
-                lock (_allObjectsLock)
-                    _allObjects.ForEach(a => a.LastGetTime = a.LastReturnTime = new DateTime(2000, 1, 1));
-
                 Policy.OnAvailable();
                 TestTrace.WriteLine($"【{Policy.Name}】Recovered", ConsoleColor.DarkGreen);
             }
@@ -353,7 +358,7 @@ namespace FreeRedis.Internal.ObjectPool
             }
             catch
             {
-                Return(obj);
+                Return(obj, true);
                 throw;
             }
 
@@ -405,7 +410,7 @@ namespace FreeRedis.Internal.ObjectPool
             }
             catch
             {
-                Return(obj);
+                Return(obj, true);
                 throw;
             }
 
@@ -418,7 +423,7 @@ namespace FreeRedis.Internal.ObjectPool
         }
 #endif
 
-        public void Return(Object<T> obj, bool isReset = false)
+		public void Return(Object<T> obj, bool isReset = false)
         {
             if (obj == null) return;
             if (obj._isReturned) return;

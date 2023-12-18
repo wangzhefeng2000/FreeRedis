@@ -1,6 +1,7 @@
 ﻿#if isasync
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -38,7 +39,7 @@ namespace FreeRedis
                     {
                         if (destination == null) destination = ms = new MemoryStream();
                         var lenstr = ReadLine(null);
-                        if (int.TryParse(lenstr, out var len))
+                        if (int.TryParse(lenstr, NumberStyles.Any, CultureInfo.InvariantCulture.NumberFormat, out var len))
                         {
                             if (len < 0) return null;
                             if (len > 0) await ReadAsync(destination, len, bufferSize);
@@ -53,7 +54,7 @@ namespace FreeRedis
                                 char c = (char)_stream.ReadByte();
                                 if (c != ';') throw new ProtocolViolationException($"Expecting fail Streamed strings ';', got '{c}'");
                                 var clenstr = ReadLine(null);
-                                if (int.TryParse(clenstr, out var clen))
+                                if (int.TryParse(clenstr, NumberStyles.Any, CultureInfo.InvariantCulture.NumberFormat, out var clen))
                                 {
                                     if (clen == 0) break;
                                     if (clen > 0)
@@ -80,7 +81,7 @@ namespace FreeRedis
             async Task<object[]> ReadArrayAsync(char msgtype, Encoding encoding)
             {
                 var lenstr = ReadLine(null);
-                if (int.TryParse(lenstr, out var len))
+                if (int.TryParse(lenstr, NumberStyles.Any, CultureInfo.InvariantCulture.NumberFormat, out var len))
                 {
                     if (len < 0) return null;
                     var arr = new object[len];
@@ -105,7 +106,7 @@ namespace FreeRedis
             async Task<object[]> ReadMapAsync(char msgtype, Encoding encoding)
             {
                 var lenstr = ReadLine(null);
-                if (int.TryParse(lenstr, out var len))
+                if (int.TryParse(lenstr, NumberStyles.Any, CultureInfo.InvariantCulture.NumberFormat, out var len))
                 {
                     if (len < 0) return null;
                     var arr = new object[len * 2];
@@ -146,7 +147,13 @@ namespace FreeRedis
                         case '$': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.BlobString);
                         case '+': return new RedisResult(ReadSimpleString(), false, RedisMessageType.SimpleString);
                         case '=': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.VerbatimString);
-                        case '-': return new RedisResult(ReadSimpleString(), false, RedisMessageType.SimpleError);
+                        case '-':
+                            {
+                                var simpleError = ReadSimpleString();
+                                if (simpleError == "NOAUTH Authentication required.")
+                                    throw new ProtocolViolationException(simpleError);
+                                return new RedisResult(simpleError, false, RedisMessageType.SimpleError);
+                            }
                         case '!': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.BlobError);
                         case ':': return new RedisResult(ReadNumber(c), false, RedisMessageType.Number);
                         case '(': return new RedisResult(ReadBigNumber(c), false, RedisMessageType.BigNumber);

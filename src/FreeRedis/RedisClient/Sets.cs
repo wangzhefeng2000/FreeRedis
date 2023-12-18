@@ -24,7 +24,7 @@ namespace FreeRedis
         public Task<bool> SIsMemberAsync<T>(string key, T member) => CallAsync("SISMEMBER".InputKey(key).InputRaw(SerializeRedisValue(member)), rt => rt.ThrowOrValue<bool>());
         public Task<string[]> SMembersAsync(string key) => CallAsync("SMEMBERS".InputKey(key), rt => rt.ThrowOrValue<string[]>());
         public Task<T[]> SMembersAsync<T>(string key) => SReadArrayAsync<T>("SMEMBERS".InputKey(key));
-        public Task<bool[]> SMIsMemberAsync<T>(string key, params object[] members) => CallAsync("SMISMEMBER".InputKey(key).Input(members.Select(a => SerializeRedisValue(a)).ToArray()), rt => rt.ThrowOrValue<bool[]>());
+        public Task<bool[]> SMIsMemberAsync(string key, params object[] members) => CallAsync("SMISMEMBER".InputKey(key).Input(members.Select(a => SerializeRedisValue(a)).ToArray()), rt => rt.ThrowOrValue<bool[]>());
 
         public Task<bool> SMoveAsync<T>(string source, string destination, T member) => CallAsync("SMOVE"
             .InputKey(source)
@@ -42,12 +42,17 @@ namespace FreeRedis
         public Task<T[]> SRandMemberAsync<T>(string key, int count) => SReadArrayAsync<T>("SRANDMEMBER".InputKey(key, count));
 
         public Task<long> SRemAsync(string key, params object[] members) => CallAsync("SREM".InputKey(key).Input(members.Select(a => SerializeRedisValue(a)).ToArray()), rt => rt.ThrowOrValue<long>());
-        public Task<ScanResult<string>> SScanAsync(string key, long cursor, string pattern, long count) => CallAsync("SSCAN"
-            .InputKey(key, cursor)
-            .InputIf(!string.IsNullOrWhiteSpace(pattern), "MATCH", pattern)
-            .InputIf(count != 0, "COUNT", count), rt => rt.ThrowOrValue((a, _) => new ScanResult<string>(a[0].ConvertTo<long>(), a[1].ConvertTo<string[]>())));
+		public Task<ScanResult<string>> SScanAsync(string key, long cursor, string pattern, long count) => CallAsync("SSCAN"
+			.InputKey(key, cursor)
+			.InputIf(!string.IsNullOrWhiteSpace(pattern), "MATCH", pattern)
+			.InputIf(count != 0, "COUNT", count), rt => rt.ThrowOrValue((a, _) => new ScanResult<string>(a[0].ConvertTo<long>(), a[1].ConvertTo<string[]>())));
+		public Task<ScanResult<T>> SScanAsync<T>(string key, long cursor, string pattern, long count) => CallAsync("SSCAN"
+			.InputKey(key, cursor)
+			.FlagReadbytes(true)
+			.InputIf(!string.IsNullOrWhiteSpace(pattern), "MATCH", pattern)
+			.InputIf(count != 0, "COUNT", count), rt => rt.ThrowOrValue((a, _) => new ScanResult<T>(a[0].ConvertTo<long>(), a[1].ConvertTo<byte[][]>().Select(b => DeserializeRedisValue<T>(b, rt.Encoding)).ToArray())));
 
-        public Task<string[]> SUnionAsync(params string[] keys) => CallAsync("SUNION".InputKey(keys), rt => rt.ThrowOrValue<string[]>());
+		public Task<string[]> SUnionAsync(params string[] keys) => CallAsync("SUNION".InputKey(keys), rt => rt.ThrowOrValue<string[]>());
         public Task<T[]> SUnionAsync<T>(params string[] keys) => SReadArrayAsync<T>("SUNION".InputKey(keys));
         public Task<long> SUnionStoreAsync(string destination, params string[] keys) => CallAsync("SUNIONSTORE".InputKey(destination).InputKey(keys), rt => rt.ThrowOrValue<long>());
 
@@ -70,7 +75,7 @@ namespace FreeRedis
         public bool SIsMember<T>(string key, T member) => Call("SISMEMBER".InputKey(key).InputRaw(SerializeRedisValue(member)), rt => rt.ThrowOrValue<bool>());
         public string[] SMembers(string key) => Call("SMEMBERS".InputKey(key), rt => rt.ThrowOrValue<string[]>());
         public T[] SMembers<T>(string key) => SReadArray<T>("SMEMBERS".InputKey(key));
-        public bool[] SMIsMember<T>(string key, params object[] members) => Call("SMISMEMBER".InputKey(key).Input(members.Select(a => SerializeRedisValue(a)).ToArray()), rt => rt.ThrowOrValue<bool[]>());
+        public bool[] SMIsMember(string key, params object[] members) => Call("SMISMEMBER".InputKey(key).Input(members.Select(a => SerializeRedisValue(a)).ToArray()), rt => rt.ThrowOrValue<bool[]>());
 
         public bool SMove<T>(string source, string destination, T member) => Call("SMOVE"
             .InputKey(source)
@@ -92,9 +97,15 @@ namespace FreeRedis
             .InputKey(key, cursor)
             .InputIf(!string.IsNullOrWhiteSpace(pattern), "MATCH", pattern)
             .InputIf(count != 0, "COUNT", count), rt => rt.ThrowOrValue((a, _) => new ScanResult<string>(a[0].ConvertTo<long>(), a[1].ConvertTo<string[]>())));
-        public IEnumerable<string[]> SScan(string key, string pattern, long count) => new ScanCollection<string>(this, "sscan", (cli, cursor) => cli.SScan(key, cursor, pattern, count));
+		public ScanResult<T> SScan<T>(string key, long cursor, string pattern, long count) => Call("SSCAN"
+			.InputKey(key, cursor)
+			.FlagReadbytes(true)
+			.InputIf(!string.IsNullOrWhiteSpace(pattern), "MATCH", pattern)
+			.InputIf(count != 0, "COUNT", count), rt => rt.ThrowOrValue((a, _) => new ScanResult<T>(a[0].ConvertTo<long>(), a[1].ConvertTo<byte[][]>().Select(b => DeserializeRedisValue<T>(b, rt.Encoding)).ToArray())));
+		public IEnumerable<string[]> SScan(string key, string pattern, long count) => new ScanCollection<string>(this, "sscan", (cli, cursor) => cli.SScan(key, cursor, pattern, count));
+		public IEnumerable<T[]> SScan<T>(string key, string pattern, long count) => new ScanCollection<T>(this, "sscan", (cli, cursor) => cli.SScan<T>(key, cursor, pattern, count));
 
-        public string[] SUnion(params string[] keys) => Call("SUNION".InputKey(keys), rt => rt.ThrowOrValue<string[]>());
+		public string[] SUnion(params string[] keys) => Call("SUNION".InputKey(keys), rt => rt.ThrowOrValue<string[]>());
         public T[] SUnion<T>(params string[] keys) => SReadArray<T>("SUNION".InputKey(keys));
         public long SUnionStore(string destination, params string[] keys) => Call("SUNIONSTORE".InputKey(destination).InputKey(keys), rt => rt.ThrowOrValue<long>());
 

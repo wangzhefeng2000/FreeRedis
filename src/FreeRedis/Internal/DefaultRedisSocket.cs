@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace FreeRedis.Internal
@@ -104,9 +103,10 @@ namespace FreeRedis.Internal
 
         Socket _socket;
         public Socket Socket => _socket ?? throw new RedisClientException("Redis socket connection was not opened");
-        NetworkStream _stream;
-        public Stream Stream => _stream ?? throw new RedisClientException("Redis socket connection was not opened");
-        public bool IsConnected => _socket?.Connected == true && _stream != null;
+        NetworkStream _netStream;
+        SslStream _sslStream;
+        public Stream Stream => ((Stream)_sslStream ?? _netStream) ?? throw new RedisClientException("Redis socket connection was not opened");
+        public bool IsConnected => _socket?.Connected == true && _netStream != null;
         public event EventHandler<EventArgs> Connected;
         public event EventHandler<EventArgs> Disconnected;
         public ClientReplyType ClientReply { get; protected set; } = ClientReplyType.on;
@@ -124,11 +124,15 @@ namespace FreeRedis.Internal
 
         public RedisProtocol Protocol { get; set; } = RedisProtocol.RESP2;
         public Encoding Encoding { get; set; } = Encoding.UTF8;
+        RemoteCertificateValidationCallback _certificateValidation;
+        LocalCertificateSelectionCallback _certificateSelection;
 
-        public DefaultRedisSocket(string host, bool ssl)
+        public DefaultRedisSocket(string host, bool ssl, RemoteCertificateValidationCallback certificateValidation, LocalCertificateSelectionCallback certificateSelection)
         {
             Host = host;
             Ssl = ssl;
+            _certificateValidation = certificateValidation;
+            _certificateSelection = certificateSelection;
         }
 
         void WriteAfter(CommandPacket cmd)
@@ -237,28 +241,46 @@ namespace FreeRedis.Internal
                 ResetHost(Host);
 
                 EndPoint endpoint = IPAddress.TryParse(_ip, out var tryip) ?
-                    new IPEndPoint(tryip, _port) :
-                    new IPEndPoint(Dns.GetHostAddresses(_ip).FirstOrDefault() ?? IPAddress.Parse(_ip), _port);
+                    (EndPoint)new IPEndPoint(tryip, _port) :
+                    new DnsEndPoint(_ip, _port);
 
                 var localSocket = endpoint.AddressFamily == AddressFamily.InterNetworkV6 ? 
                     new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp):
                     new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-                var asyncResult = localSocket.BeginConnect(endpoint, null, null);
-                if (!asyncResult.AsyncWaitHandle.WaitOne(ConnectTimeout, true))
+                try
                 {
-                    var endpointString = endpoint.ToString();
-                    if (endpointString != $"{_ip}:{_port}") endpointString = $"{_ip}:{_port} -> {endpointString}";
-                    var debugString = "";
-                    try { debugString = $", DEBUG: Dns.GetHostEntry({_ip})={Dns.GetHostEntry(_ip)}"; }
-                    catch (Exception ex) { debugString = $", DEBUG: {ex.Message}"; }
-                    throw new TimeoutException($"Connect to redis-server({endpointString}) timeout{debugString}");
+                    var asyncResult = localSocket.BeginConnect(endpoint, null, null);
+                    if (!asyncResult.AsyncWaitHandle.WaitOne(ConnectTimeout, true))
+                    {
+                        var endpointString = endpoint.ToString();
+                        if (endpointString != $"{_ip}:{_port}") endpointString = $"{_ip}:{_port} -> {endpointString}";
+                        var debugString = "";
+                        if (endpoint is DnsEndPoint)
+                        {
+                            try { debugString = $", DEBUG: Dns.GetHostEntry({_ip})={Dns.GetHostEntry(_ip)}"; }
+                            catch (Exception ex) { debugString = $", DEBUG: {ex.Message}"; }
+                        }
+                        throw new TimeoutException($"Connect to redis-server({endpointString}) timeout{debugString}");
+                    }
+                    localSocket.EndConnect(asyncResult);
                 }
-                localSocket.EndConnect(asyncResult);
+                catch
+                {
+                    ReleaseSocket(localSocket);
+                    throw;
+                }
                 _socket = localSocket;
-                _stream = new NetworkStream(Socket, true);
                 _socket.ReceiveTimeout = (int)ReceiveTimeout.TotalMilliseconds;
                 _socket.SendTimeout = (int)SendTimeout.TotalMilliseconds;
+                _netStream = new NetworkStream(Socket, true);
+                if (Ssl)
+                {
+                    _sslStream = new SslStream(_netStream, true, _certificateValidation, _certificateSelection);
+                    var stringHostOnly = endpoint is DnsEndPoint ep1 ? ep1.Host :
+                        (endpoint is IPEndPoint ep2 ? ep2.Address.ToString() : "");
+                    _sslStream.AuthenticateAsClient(stringHostOnly);
+                }
                 Connected?.Invoke(this, new EventArgs());
             }
         }
@@ -272,22 +294,33 @@ namespace FreeRedis.Internal
             _port = sh.Value;
         }
 
+        void ReleaseSocket(Socket socket)
+        {
+            if (socket == null) return;
+            try { socket.Shutdown(SocketShutdown.Both); } catch { }
+            try { socket.Close(); } catch { }
+            try { socket.Dispose(); } catch { }
+        }
         public void ReleaseSocket()
         {
             lock (_connectLock)
             {
                 if (_socket != null)
                 {
-                    try { _socket.Shutdown(SocketShutdown.Both); } catch { }
-                    try { _socket.Close(); } catch { }
-                    try { _socket.Dispose(); } catch { }
+                    ReleaseSocket(_socket);
                     _socket = null;
                 }
-                if (_stream != null)
+                if (_sslStream != null)
                 {
-                    try { _stream.Close(); } catch { }
-                    try { _stream.Dispose(); } catch { }
-                    _stream = null;
+                    try { _sslStream.Close(); } catch { }
+                    try { _sslStream.Dispose(); } catch { }
+                    _sslStream = null;
+                }
+                if (_netStream != null)
+                {
+                    try { _netStream.Close(); } catch { }
+                    try { _netStream.Dispose(); } catch { }
+                    _netStream = null;
                 }
                 _reader = null;
                 Disconnected?.Invoke(this, new EventArgs());
